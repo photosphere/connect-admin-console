@@ -145,10 +145,14 @@ if selected_regions:
         # Display mock account data
         st.subheader("Existing Accounts")
         accounts_data = {
-            "Username": ["agent1", "supervisor1", "admin1"],
             "Email": ["agent1@example.com", "supervisor1@example.com", "admin1@example.com"],
-            "Role": ["Agent", "Supervisor", "Admin"],
-            "Status": ["Active", "Active", "Active"]
+            "Username": ["agent1", "supervisor1", "admin1"],
+            "First Name": ["agent1", "supervisor1", "admin1"],
+            "Last Name": ["test", "test", "test"],
+            "User Group": ["AG1", "AG2", "AG3"],
+            "Routing Profile": ["Agent", "Supervisor", "Admin"],
+            "Quick Connect": ["agent1", "supervisor1", "admin1"],
+            "Instance": ["instance-56a4e02c", "instance-56a4e02c", "instance-56a4e02c"]
         }
         st.dataframe(pd.DataFrame(accounts_data))
 
