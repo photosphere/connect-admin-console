@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import uuid
 import boto3
+import os
 
 # Initialize Boto3 client
 connect_client = boto3.client("connect")
@@ -12,6 +13,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# File paths for saved selections
+SELECTED_REGIONS_FILE = "selected_regions.csv"
+SELECTED_INSTANCES_FILE = "selected_instances.csv"
+INSTANCES_CACHE_FILE = "instances_cache.csv"
 
 # Define AWS regions where Amazon Connect is available
 # Using a dictionary to map region codes to their display names
@@ -41,22 +47,103 @@ if 'show_routing_form' not in st.session_state:
     st.session_state['show_routing_form'] = False
 if 'show_quickconnect_form' not in st.session_state:
     st.session_state['show_quickconnect_form'] = False
+if 'instances_df' not in st.session_state:
+    st.session_state['instances_df'] = None
 
-# Function to generate mock Connect instances
+# Function to load saved regions from CSV
+
+
+def load_saved_regions():
+    if os.path.exists(SELECTED_REGIONS_FILE):
+        try:
+            regions_df = pd.read_csv(SELECTED_REGIONS_FILE)
+            if 'region' in regions_df.columns:
+                return regions_df['region'].tolist()
+        except Exception as e:
+            st.warning(f"Error loading saved regions: {e}")
+    return ["us-east-1"]  # Default to us-east-1 if no saved regions or error
+
+# Function to save selected regions to CSV
+
+
+def save_regions_to_csv(regions):
+    try:
+        regions_df = pd.DataFrame({'region': regions})
+        regions_df.to_csv(SELECTED_REGIONS_FILE, index=False)
+    except Exception as e:
+        st.warning(f"Error saving regions: {e}")
+
+# Function to load saved instances from CSV
+
+
+def load_saved_instances():
+    if os.path.exists(SELECTED_INSTANCES_FILE):
+        try:
+            instances_df = pd.read_csv(SELECTED_INSTANCES_FILE)
+            if 'instance_id' in instances_df.columns:
+                return instances_df['instance_id'].tolist()
+        except Exception as e:
+            st.warning(f"Error loading saved instances: {e}")
+    return []
+
+# Function to save selected instances to CSV
+
+
+def save_instances_to_csv(instance_ids):
+    try:
+        instances_df = pd.DataFrame({'instance_id': instance_ids})
+        instances_df.to_csv(SELECTED_INSTANCES_FILE, index=False)
+    except Exception as e:
+        st.warning(f"Error saving instances: {e}")
+
+# Function to generate mock Connect instances or fetch real ones
 
 
 def generate_mock_instances(regions):
+    # First check if we have cached results
+    if os.path.exists(INSTANCES_CACHE_FILE):
+        try:
+            cached_df = pd.read_csv(INSTANCES_CACHE_FILE)
+            # Filter by the selected regions
+            cached_df = cached_df[cached_df['Region'].isin(regions)]
+            if not cached_df.empty:
+                return cached_df
+        except Exception:
+            # If there's an error loading the cache, continue to fetch new data
+            pass
+
     instances = []
     for region in regions:
-        connect = boto3.client('connect', region_name=region)
-        res = connect.list_instances()
-        for i in res['InstanceSummaryList']:
-            instances.append({
-                "Instance ID": i['Id'],
-                "Region": region,
-                "Instance Alias": i['InstanceAlias']
-            })
-    return pd.DataFrame(instances)
+        try:
+            connect = boto3.client('connect', region_name=region)
+            res = connect.list_instances()
+            for i in res['InstanceSummaryList']:
+                instances.append({
+                    "Instance ID": i['Id'],
+                    "Region": region,
+                    "Instance Alias": i.get('InstanceAlias', 'No Alias')
+                })
+        except Exception as e:
+            # If there's an error fetching instances, create mock data
+            st.warning(f"Error fetching instances for region {region}: {e}")
+            for i in range(1, 4):
+                instance_id = f"instance-{uuid.uuid4().hex[:8]}"
+                instances.append({
+                    "Instance ID": instance_id,
+                    "Region": region,
+                    "Instance Alias": f"MockInstance-{i}"
+                })
+
+    instances_df = pd.DataFrame(instances)
+
+    # Cache the results for future use
+    if not instances_df.empty:
+        try:
+            instances_df.to_csv(INSTANCES_CACHE_FILE, index=False)
+        except Exception:
+            pass
+
+    return instances_df
 
 # Functions to toggle form visibility
 
@@ -76,22 +163,36 @@ def toggle_quickconnect_form():
 # Main title
 st.title("Amazon Connect Management Portal")
 
+# Load previously selected regions from CSV
+default_regions = load_saved_regions()
+
+# Convert default regions to display names for the multiselect
+default_display_regions = [CONNECT_REGION_MAP[r]
+                           for r in default_regions if r in CONNECT_REGION_MAP]
+
 # Multi-select box for regions with formatted display names
 selected_display_regions = st.multiselect(
     "Select Connect Regions",
     REGION_DISPLAY_NAMES,
-    default=[CONNECT_REGION_MAP["us-east-1"]]
+    default=default_display_regions
 )
 
 # Convert the selected display names back to region codes
 selected_regions = [key for key, value in CONNECT_REGION_MAP.items()
                     if value in selected_display_regions]
 
+# Save the selected regions to CSV when they change
+if selected_regions != default_regions:
+    save_regions_to_csv(selected_regions)
+
 # Display Connect instances based on selected regions
 if selected_regions:
-    # In a real application, you would query the AWS API for instances
-    # Here we're generating mock data
-    instances_df = generate_mock_instances(selected_regions)
+    # If instances haven't been loaded yet, or if the selected regions changed
+    if st.session_state['instances_df'] is None or set(selected_regions) != set(default_regions):
+        st.session_state['instances_df'] = generate_mock_instances(
+            selected_regions)
+
+    instances_df = st.session_state['instances_df']
 
     # Create a dictionary mapping instance_id to display name (instance_id, region)
     instance_display_map = {}
@@ -99,19 +200,28 @@ if selected_regions:
         instance_id = row["Instance ID"]
         instance_alias = row["Instance Alias"]
         region = row["Region"]
-        display_name = f"{instance_id},{instance_alias}, {CONNECT_REGION_MAP[region]}"
+        display_name = f"{instance_id}, {instance_alias}, {CONNECT_REGION_MAP[region]}"
         instance_display_map[instance_id] = display_name
 
     # Create a list of instance IDs and their display names
     instance_ids = list(instance_display_map.keys())
-    instance_display_names = list(instance_display_map.values())
+
+    # Load previously selected instances
+    default_instances = load_saved_instances()
+    # Filter to ensure only valid instances are selected
+    default_instances = [i for i in default_instances if i in instance_ids]
 
     # Create a multi-select box for instances
     selected_instance_ids = st.multiselect(
         "Select Connect Instances",
         options=instance_ids,
+        default=default_instances,
         format_func=lambda x: instance_display_map[x]
     )
+
+    # Save the selected instances to CSV when they change
+    if set(selected_instance_ids) != set(default_instances):
+        save_instances_to_csv(selected_instance_ids)
 
     # Tabs for different management sections
     tabs = st.tabs(
@@ -257,7 +367,8 @@ if selected_regions:
             "Description": ["Support team", "Sales escalations", "External helpdesk"]
         }
         st.dataframe(pd.DataFrame(quick_connects_data))
-
+else:
+    st.warning("Please select at least one AWS region.")
 
 # Add footer
 st.markdown("---")
