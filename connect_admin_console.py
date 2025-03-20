@@ -1,6 +1,10 @@
 import streamlit as st
 import pandas as pd
 import uuid
+import boto3
+
+# Initialize Boto3 client
+connect_client = boto3.client("connect")
 
 # Set page configuration
 st.set_page_config(
@@ -44,12 +48,13 @@ if 'show_quickconnect_form' not in st.session_state:
 def generate_mock_instances(regions):
     instances = []
     for region in regions:
-        # Generate 1-3 instances per region
-        for i in range(1, 4):
-            instance_id = f"instance-{uuid.uuid4().hex[:8]}"
+        connect = boto3.client('connect', region_name=region)
+        res = connect.list_instances()
+        for i in res['InstanceSummaryList']:
             instances.append({
-                "Instance ID": instance_id,
-                "Region": region
+                "Instance ID": i['Id'],
+                "Region": region,
+                "Instance Alias": i['InstanceAlias']
             })
     return pd.DataFrame(instances)
 
@@ -92,8 +97,9 @@ if selected_regions:
     instance_display_map = {}
     for idx, row in instances_df.iterrows():
         instance_id = row["Instance ID"]
+        instance_alias = row["Instance Alias"]
         region = row["Region"]
-        display_name = f"{instance_id}, {CONNECT_REGION_MAP[region]}"
+        display_name = f"{instance_id},{instance_alias}, {CONNECT_REGION_MAP[region]}"
         instance_display_map[instance_id] = display_name
 
     # Create a list of instance IDs and their display names
